@@ -32,12 +32,7 @@ def upload_csv_stream_to_datalake(destination: str, filename: str, stream):
     logging.info(f"📥 Recibido archivo: {filename}")
     logging.info(f"📌 Destino solicitado: {destination}")
 
-    # Carpetas REALES
-    if destination == "practitioner":
-        folder = "data_sucia/data_sucia_practitioner"
-    else:
-        folder = "data_sucia/data_sucia_continuous_integration"
-
+    folder = "flight_delays_raw"
     logging.info(f"📁 Carpeta destino en ADLS: {folder}")
 
     fs = datalake.get_file_system_client(CONTAINER_NAME)

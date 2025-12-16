@@ -16,9 +16,9 @@ silver_path = f"abfss://silver@{adls_endpoint}/flight_delays_clean"
 df_silver = spark.read.format("delta").load(silver_path)
 
 # 2. Configuración de la conexión a PostgreSQL (usando Secrets)
-pg_host = dbutils.secrets.get(scope="keyvault-secrets", key="DB-HOST")
-pg_user = dbutils.secrets.get(scope="keyvault-secrets", key="DB-USER")
-pg_pass = dbutils.secrets.get(scope="keyvault-secrets", key="DB-PASSWORD")
+pg_host = dbutils.widgets.get("pg_host")
+pg_user = "adminuser"
+pg_pass = "SecurePass123!"
 db_name = "data_oro_db" # Asumiendo la base de datos unificada
 
 jdbc_url = f"jdbc:postgresql://{pg_host}:5432/{db_name}?sslmode=require"

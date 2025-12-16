@@ -112,3 +112,45 @@ def get_flight_filter_options():
     except Exception as e:
         conn.rollback()
         return {"error": str(e)}
+
+
+# ============================================================
+# 6. Obtener Detalles de Vuelos (Explorador)
+# ============================================================
+def get_flight_details(page=1, limit=10, airline='todos', origin='todos', date='todos'):
+    """Obtiene datos detallados de la vista de exploración de vuelos."""
+    view = "public.vw_flight_analytics"
+    where_sql, params = _build_where_clause(airline=airline, origin=origin, date=date)
+
+    query_count = f"SELECT COUNT(*) FROM {view} {where_sql}"
+    query_data = f"""
+        SELECT 
+            TO_CHAR(flight_date, 'YYYY-MM-DD') as flight_date,
+            airline_name,
+            origin_airport,
+            destination_airport,
+            flight_num,
+            dep_delay,
+            arr_delay,
+            cancelled,
+            diverted,
+            air_time,
+            distance
+        FROM {view}
+        {where_sql}
+        ORDER BY flight_date DESC, airline_name, origin_airport, flight_num
+        LIMIT %s OFFSET %s
+    """
+
+    conn = get_db()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(query_count, params)
+            total = cur.fetchone()[0]
+
+            cur.execute(query_data, params + [limit, (page - 1) * limit])
+            data = [dict(row) for row in cur.fetchall()]
+            return {"data": data, "totalCount": total}
+    except Exception as e:
+        conn.rollback()
+        return {"error": str(e)}

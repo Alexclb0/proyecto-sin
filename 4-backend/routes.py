@@ -4,7 +4,7 @@
 import uuid
 from flask import Blueprint, request, jsonify, current_app
 from threading import Thread
-from database import get_flight_kpis, get_flight_filter_options
+from database import get_flight_kpis, get_flight_filter_options, get_flight_details
 from databricks_client import trigger_notebook_run
 
 # Subida ADLS
@@ -150,3 +150,15 @@ def flight_kpis():
 def flight_filters():
     """Endpoint para obtener las opciones de los filtros (aerolíneas, orígenes, fechas)."""
     return jsonify(get_flight_filter_options())
+
+@api.route("/flights/explore", methods=["GET"])
+def flight_explorer():
+    """Endpoint para obtener los datos detallados de vuelos para el explorador."""
+    args = request.args
+    return jsonify(get_flight_details(
+        page=args.get("page", 1, type=int),
+        limit=args.get("limit", 10, type=int),
+        airline=args.get("airline", "todos"),
+        origin=args.get("origin", "todos"),
+        date=args.get("date", "todos")
+    ))

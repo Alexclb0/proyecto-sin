@@ -1,62 +1,84 @@
 -- ============================================================
--- DIMENSION TIEMPO
+-- MODELO DE DATOS PARA RETRASOS DE VUELOS
 -- ============================================================
-CREATE TABLE dim_tiempo (
-    tiempo_id SERIAL PRIMARY KEY,
-    fecha DATE NOT NULL,
-    dia INT,
-    mes INT,
-    anio INT
+
+-- Dimension: Fecha del vuelo
+CREATE TABLE dim_date (
+    date_id SERIAL PRIMARY KEY,
+    flight_date DATE NOT NULL UNIQUE,
+    day_of_week INT,
+    month INT,
+    year INT
 );
 
--- ============================================================
--- DIMENSION GEOGRAFIA
--- ============================================================
-CREATE TABLE dim_geografia (
-    geografia_id SERIAL PRIMARY KEY,
-    nombre_geografia VARCHAR(200) NOT NULL
+-- Dimension: Aerolíneas
+CREATE TABLE dim_airline (
+    airline_id SERIAL PRIMARY KEY,
+    carrier_code VARCHAR(10) NOT NULL UNIQUE,
+    airline_name VARCHAR(255)
 );
 
--- ============================================================
--- DIMENSION SERVICIO N1
--- ============================================================
-CREATE TABLE dim_servicio_n1 (
-    servicio_n1_id INT PRIMARY KEY,
-    nombre_servicio VARCHAR(200),
-    nombre_uol1 VARCHAR(200),
-    nombre_uol2 VARCHAR(200)
+-- Dimension: Aeropuertos
+CREATE TABLE dim_airport (
+    airport_id SERIAL PRIMARY KEY,
+    airport_code VARCHAR(10) NOT NULL UNIQUE,
+    airport_name VARCHAR(255)
 );
 
--- ============================================================
--- FACT CI
--- ============================================================
-CREATE TABLE fact_mediciones_ci (
-    fact_id SERIAL PRIMARY KEY,
-
-    tiempo_id INT NOT NULL,
-    geografia_id INT NOT NULL,
-    servicio_n1_id INT NOT NULL,
-
-    issues_analysis_in_review_menor_7_dias INT,
-    issues_analysis_in_review INT,
-    historias_deployed_fix_version INT,
-    nro_historias_deployed INT,
-    repositorios_activos_nomenclatura_estandar INT,
-    total_repositorios_activos INT,
-    tiempo_medio_aprobacion_pr FLOAT,
-    tamano_medio_pr FLOAT,
-    repositorios_activos_gobernados_chimera INT,
-    tiempo_medio_integracion FLOAT,
-    tiempo_medio_construcciones FLOAT,
-    ejecuciones_exitosas_pipelines INT,
-    ejecuciones_totales_pipelines INT,
-    tiempo_medio_reparacion_builds FLOAT,
-    repositorios_activos_sonarqube_ok INT,
-    repositorios_conectados_sonarqube INT,
-    items_pruebas_desplegados_xray INT,
-    items_desplegados_totales INT,
-
-    FOREIGN KEY (tiempo_id) REFERENCES dim_tiempo(tiempo_id),
-    FOREIGN KEY (geografia_id) REFERENCES dim_geografia(geografia_id),
-    FOREIGN KEY (servicio_n1_id) REFERENCES dim_servicio_n1(servicio_n1_id)
+-- Dimension: Aeronaves
+CREATE TABLE dim_aircraft (
+    aircraft_id SERIAL PRIMARY KEY,
+    tail_num VARCHAR(20) NOT NULL UNIQUE
 );
+
+-- Tabla de Hechos: Métricas y detalles de los vuelos
+CREATE TABLE fact_flight_delays (
+    flight_delay_id SERIAL PRIMARY KEY,
+    date_id INT NOT NULL,
+    airline_id INT NOT NULL,
+    origin_airport_id INT NOT NULL,
+    dest_airport_id INT NOT NULL,
+    aircraft_id INT, -- Puede ser nulo si no hay TailNum
+
+    flight_num VARCHAR(20),
+    dep_time VARCHAR(4),
+    arr_time VARCHAR(4),
+    crs_arr_time VARCHAR(4),
+    actual_elapsed_time INT,
+    crs_elapsed_time INT,
+    air_time INT,
+    arr_delay INT,
+    dep_delay INT,
+    distance INT,
+    taxi_in INT,
+    taxi_out INT,
+    cancelled BOOLEAN,
+    diverted BOOLEAN,
+    cancellation_code VARCHAR(5),
+    carrier_delay INT,
+    weather_delay INT,
+    nas_delay INT,
+    security_delay INT,
+    late_aircraft_delay INT,
+
+    FOREIGN KEY (date_id) REFERENCES dim_date(date_id),
+    FOREIGN KEY (airline_id) REFERENCES dim_airline(airline_id),
+    FOREIGN KEY (origin_airport_id) REFERENCES dim_airport(airport_id),
+    FOREIGN KEY (dest_airport_id) REFERENCES dim_airport(airport_id),
+    FOREIGN KEY (aircraft_id) REFERENCES dim_aircraft(aircraft_id)
+);
+
+-- Vista Agregada (Capa de Oro/Semántica)
+CREATE OR REPLACE VIEW vw_flight_analytics AS
+SELECT
+    d.flight_date,
+    d.day_of_week,
+    al.airline_name,
+    ao.airport_name AS origin_airport,
+    ad.airport_name AS destination_airport,
+    f.*
+FROM fact_flight_delays f
+JOIN dim_date d ON f.date_id = d.date_id
+JOIN dim_airline al ON f.airline_id = al.airline_id
+JOIN dim_airport ao ON f.origin_airport_id = ao.airport_id
+JOIN dim_airport ad ON f.dest_airport_id = ad.airport_id;

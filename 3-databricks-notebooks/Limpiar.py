@@ -1,141 +1,63 @@
 # Databricks notebook source
+# /Workspace/Shared/Apps/FlightDelays/Limpiar.py
+
 from pyspark.sql import functions as F
-from pyspark.sql.types import DoubleType, StringType
-import re, time
+from pyspark.sql.types import IntegerType, BooleanType, DateType
 
-# =========================
-# 1️⃣ OBTENER PARÁMETROS Y CONSTRUIR RUTAS
-# =========================
-dbutils.widgets.text("input_path", "", "1. Ruta del archivo de entrada en ADLS")
-dbutils.widgets.text("adls_endpoint", "", "2. Endpoint del Data Lake (ej: stxxx.dfs.core.windows.net)")
-
-input_path = dbutils.widgets.get("input_path")
+# 1. Definir rutas de entrada (Bronce) y salida (Plata)
+dbutils.widgets.text("adls_endpoint", "", "ADLS Endpoint (ej: stxxx.dfs.core.windows.net)")
 adls_endpoint = dbutils.widgets.get("adls_endpoint")
 
-temp_path  = f"abfss://silver@{adls_endpoint}/tmp_continuous_integration"
-final_dir  = f"abfss://silver@{adls_endpoint}/data_limpia/data_limpia_continuous_integration"
-final_file = f"{final_dir}/data_limpia_continuous_integration.csv"
+bronze_path = f"abfss://bronze@{adls_endpoint}/flight_delay.csv"
+silver_path = f"abfss://silver@{adls_endpoint}/flight_delays_clean"
 
-# =========================
-# 2️⃣ LEER CSV DESDE ADLS
-# =========================
-df = spark.read.option("header", True).option("delimiter", ",").csv(input_path)
+# 2. Leer datos crudos de la capa Bronce
+df_raw = spark.read.csv(bronze_path, header=True, inferSchema=False)
 
-# =========================
-# 3️⃣ RENAME COLUMNAS
-# =========================
-cols_finales = {
-    "period_month": "mes",
-    "ug_name": "geografia",
-    "uol1_name": "uol1_name",
-    "uol2_name": "uol2_name",
-    "servicel1_id": "service1_id",
-    "servicel1_name": "service1_name",
-    "issues_review_menor_7_dias": "issues_analysis_in_review_menor_7_dias",
-    "issues_en_revision_total": "issues_analysis_in_review",
-    "historias_fix_version_deploy": "historias_deployed_fix_version",
-    "cantidad_historias_deploy": "nro_historias_deployed",
-    "repos_activos_con_nomenclatura_estandar": "repositorios_activos_nomenclatura_estandar",
-    "total_repositorios_en_uso": "total_repositorios_activos",
-    "promedio_tiempo_aprobacion_pr": "tiempo_medio_aprobacion_pr",
-    "promedio_tamano_pr": "tamano_medio_pr",
-    "repos_gobernados_chimera_activos": "repositorios_activos_gobernados_chimera",
-    "promedio_tiempo_integracion": "tiempo_medio_integracion",
-    "promedio_tiempo_builds": "tiempo_medio_construcciones",
-    "pipelines_ejecuciones_exitosas": "ejecuciones_exitosas_pipelines",
-    "pipelines_ejecuciones_totales": "ejecuciones_totales_pipelines",
-    "promedio_tiempo_reparacion_builds": "tiempo_medio_reparacion_builds",
-    "repos_sonarqube_ok_activos": "repositorios_activos_sonarqube_ok",
-    "repos_conectados_sonarqube": "repositorios_conectados_sonarqube",
-    "items_pruebas_desplegados_xray": "items_pruebas_desplegados_xray",
-    "items_desplegados_totales": "items_desplegados_totales"
-}
+# 3. Limpieza y Transformación de Datos
+df_clean = (
+    df_raw
+    # Corregir tipos de datos
+    .withColumn("Date", F.to_date(F.col("Date"), "dd-MM-yyyy"))
+    .withColumn("DayOfWeek", F.col("DayOfWeek").cast(IntegerType()))
+    .withColumn("ArrDelay", F.col("ArrDelay").cast(IntegerType()))
+    .withColumn("DepDelay", F.col("DepDelay").cast(IntegerType()))
+    .withColumn("Distance", F.col("Distance").cast(IntegerType()))
+    .withColumn("ActualElapsedTime", F.col("ActualElapsedTime").cast(IntegerType()))
+    .withColumn("CRSElapsedTime", F.col("CRSElapsedTime").cast(IntegerType()))
+    .withColumn("AirTime", F.col("AirTime").cast(IntegerType()))
+    .withColumn("TaxiIn", F.col("TaxiIn").cast(IntegerType()))
+    .withColumn("TaxiOut", F.col("TaxiOut").cast(IntegerType()))
+    .withColumn("Cancelled", (F.col("Cancelled") == "1").cast(BooleanType()))
+    .withColumn("Diverted", (F.col("Diverted") == "1").cast(BooleanType()))
+    .withColumn("CarrierDelay", F.col("CarrierDelay").cast(IntegerType()))
+    .withColumn("WeatherDelay", F.col("WeatherDelay").cast(IntegerType()))
+    .withColumn("NASDelay", F.col("NASDelay").cast(IntegerType()))
+    .withColumn("SecurityDelay", F.col("SecurityDelay").cast(IntegerType()))
+    .withColumn("LateAircraftDelay", F.col("LateAircraftDelay").cast(IntegerType()))
+    
+    # Renombrar columnas para mayor claridad
+    .withColumnRenamed("Date", "flight_date")
+    .withColumnRenamed("Airline", "airline_name")
+    .withColumnRenamed("Org_Airport", "origin_airport_name")
+    .withColumnRenamed("Dest_Airport", "destination_airport_name")
+    
+    # Rellenar valores nulos en columnas de retraso con 0
+    .fillna(0, subset=[
+        "CarrierDelay", "WeatherDelay", "NASDelay", 
+        "SecurityDelay", "LateAircraftDelay", "ArrDelay", "DepDelay"
+    ])
+    # Rellenar nulos en TailNum para evitar problemas en joins
+    .fillna("Unknown", subset=["TailNum"])
+)
 
-for old, new in cols_finales.items():
-    if old in df.columns:
-        df = df.withColumnRenamed(old, new)
+# 4. Escribir datos limpios en la capa Plata (formato Delta)
+(
+    df_clean.write
+    .format("delta")
+    .mode("overwrite")
+    .option("overwriteSchema", "true")
+    .save(silver_path)
+)
 
-# =========================
-# 4️⃣ UDF FECHA
-# =========================
-def transformar_mes(valor):
-    if not valor:
-        return valor
-
-    meses = {
-        "jan":"01","feb":"02","mar":"03","apr":"04","may":"05","jun":"06",
-        "jul":"07","aug":"08","sep":"09","oct":"10","nov":"11","dec":"12",
-        "ene":"01","abr":"04","ago":"08","dic":"12"
-    }
-
-    valor = valor.strip().lower()
-
-    m1 = re.match(r"(\d{1,2})-([a-zñ]{3})", valor)
-    if m1:
-        _, mes = m1.groups()
-        return f"{meses.get(mes,'01')}/25/2025"
-
-    m2 = re.match(r"([a-zñ]{3})-(\d{2})", valor)
-    if m2:
-        mes, anio = m2.groups()
-        return f"{meses.get(mes,'01')}/25/20{anio}"
-
-    return valor
-
-spark.udf.register("transformar_mes", transformar_mes, StringType())
-df = df.withColumn("mes", F.expr("transformar_mes(mes)"))
-
-# =========================
-# 5️⃣ LIMPIAR NÚMEROS
-# =========================
-cols_int = [
- "issues_analysis_in_review_menor_7_dias","issues_analysis_in_review",
- "historias_deployed_fix_version","nro_historias_deployed",
- "repositorios_activos_nomenclatura_estandar","total_repositorios_activos",
- "repositorios_activos_gobernados_chimera",
- "ejecuciones_exitosas_pipelines","ejecuciones_totales_pipelines",
- "repositorios_activos_sonarqube_ok","repositorios_conectados_sonarqube",
- "items_pruebas_desplegados_xray","items_desplegados_totales"
-]
-
-for c in cols_int:
-    if c in df.columns:
-        df = df.withColumn(c, F.regexp_replace(F.col(c), r"\.", "").cast(DoubleType()))
-
-cols_float = [
- "tiempo_medio_aprobacion_pr","tamano_medio_pr",
- "tiempo_medio_integracion","tiempo_medio_construcciones",
- "tiempo_medio_reparacion_builds"
-]
-
-for c in cols_float:
-    if c in df.columns:
-        df = df.withColumn(c, F.col(c).cast(DoubleType()))
-
-# =========================
-# 6️⃣ ORDENAR
-# =========================
-df = df.orderBy("mes","geografia","uol1_name","uol2_name","service1_id")
-
-# =========================
-# 7️⃣ GUARDAR EN TEMPORAL
-# =========================
-df.coalesce(1).write.mode("overwrite").option("header", True).csv(temp_path)
-
-# =========================
-# 8️⃣ MOVER CSV FINAL
-# =========================
-files = dbutils.fs.ls(temp_path)
-csv_file = [f.path for f in files if f.path.endswith(".csv")][0]
-
-dbutils.fs.mkdirs(final_dir)
-dbutils.fs.rm(final_file, True)
-dbutils.fs.mv(csv_file, final_file)
-
-# =========================
-# 9️⃣ LIMPIAR TEMP
-# =========================
-dbutils.fs.rm(temp_path, True)
-
-print("✅ Archivo final generado correctamente en:")
-print(final_file)
+print(f"Datos limpios guardados exitosamente en: {silver_path}")

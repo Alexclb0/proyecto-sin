@@ -1,5 +1,8 @@
 # Databricks notebook source
+# /Workspace/Shared/Apps/FlightDelays/Transformar.py
+
 from pyspark.sql import functions as F
+from pyspark.sql.window import Window
 import psycopg2
 
 # ==========================================
@@ -8,139 +11,86 @@ import psycopg2
 dbutils.widgets.text("adls_endpoint", "", "1. Endpoint del Data Lake (ej: stxxx.dfs.core.windows.net)")
 dbutils.widgets.text("pg_host", "", "2. Host del servidor PostgreSQL")
 adls_endpoint = dbutils.widgets.get("adls_endpoint")
+silver_path = f"abfss://silver@{adls_endpoint}/flight_delays_clean"
 
-path_ci = f"abfss://silver@{adls_endpoint}/data_limpia/data_limpia_continuous_integration/data_limpia_continuous_integration.csv"
+df_silver = spark.read.format("delta").load(silver_path)
 
-df = spark.read.csv(path_ci, header=True, inferSchema=True)
-df = df.withColumn("fecha", F.to_date(F.col("mes"), "MM/dd/yyyy"))
+# 2. Configuración de la conexión a PostgreSQL (usando Secrets)
+pg_host = dbutils.secrets.get(scope="keyvault-secrets", key="DB-HOST")
+pg_user = dbutils.secrets.get(scope="keyvault-secrets", key="DB-USER")
+pg_pass = dbutils.secrets.get(scope="keyvault-secrets", key="DB-PASSWORD")
+db_name = "data_oro_db" # Asumiendo la base de datos unificada
 
-# ==========================================
-# 2️⃣ CREAR DIMENSIONES -------------------------------------------------------
-# ==========================================
-
-# -------- DIM TIEMPO (ordenada por mes ascendente)
-dim_tiempo = (
-    df.select("fecha")
-      .distinct()
-      .withColumn("dia", F.dayofmonth("fecha"))
-      .withColumn("mes", F.month("fecha"))
-      .withColumn("anio", F.year("fecha"))
-      .orderBy("anio", "mes")               # ← orden correcto
-)
-
-# -------- DIM GEOGRAFIA
-dim_geografia = (
-    df.select("geografia")
-      .distinct()
-      .withColumnRenamed("geografia", "nombre_geografia")
-)
-
-# -------- DIM SERVICIO N1
-dim_servicio_n1 = (
-    df.select(
-        F.col("service1_id").cast("int").alias("servicio_n1_id"),
-        F.col("service1_name").alias("nombre_servicio"),
-        F.col("uol1_name").alias("nombre_uol1"),
-        F.col("uol2_name").alias("nombre_uol2")
-    )
-    .dropDuplicates(["servicio_n1_id"])
-    .repartition(1)
-)
-
-# ==========================================
-# 3️⃣ CONFIG PGSQL
-# ==========================================
-pg_host = dbutils.widgets.get("pg_host")
-jdbc_url = f"jdbc:postgresql://{pg_host}:5432/data_oro_db?sslmode=require"
+jdbc_url = f"jdbc:postgresql://{pg_host}:5432/{db_name}?sslmode=require"
 properties = {
     "user": "adminuser",
     "password": "SecurePass123!",
     "driver": "org.postgresql.Driver"
 }
 
-# ==========================================
-# 4️⃣ TRUNCATE + RESET IDs
-# ==========================================
-conn = psycopg2.connect(
-    host=pg_host,
-    database="data_oro_db",
-    user="adminuser",
-    password="SecurePass123!",
-    sslmode="require"
+# 3. Crear Dimensiones
+# Dimensión: Fecha
+dim_date = (
+    df_silver.select("flight_date", "DayOfWeek")
+    .distinct()
+    .withColumn("month", F.month("flight_date"))
+    .withColumn("year", F.year("flight_date"))
 )
-conn_string = f"host={pg_host} dbname='data_oro_db' user={pg_user} password={pg_pass} sslmode='require'"
-conn = psycopg2.connect(conn_string)
-cur = conn.cursor()
 
-cur.execute("TRUNCATE TABLE fact_mediciones_ci RESTART IDENTITY CASCADE;")
-cur.execute("TRUNCATE TABLE dim_tiempo RESTART IDENTITY CASCADE;")
-cur.execute("TRUNCATE TABLE dim_geografia RESTART IDENTITY CASCADE;")
-cur.execute("DELETE FROM dim_servicio_n1;")
+# Dimensión: Aerolínea
+dim_airline = df_silver.select("UniqueCarrier", "airline_name").distinct().withColumnRenamed("UniqueCarrier", "carrier_code")
 
-# Reset proper identity sequences
-cur.execute("ALTER SEQUENCE dim_tiempo_tiempo_id_seq RESTART WITH 1;")
-cur.execute("ALTER SEQUENCE dim_geografia_geografia_id_seq RESTART WITH 1;")
+# Dimensión: Aeropuerto (unificando origen y destino)
+origin_airports = df_silver.select(F.col("Origin").alias("airport_code"), F.col("origin_airport_name").alias("airport_name"))
+dest_airports = df_silver.select(F.col("Dest").alias("airport_code"), F.col("destination_airport_name").alias("airport_name"))
+dim_airport = origin_airports.union(dest_airports).distinct()
 
-conn.commit()
-cur.close()
-conn.close()
+# Dimensión: Aeronave
+dim_aircraft = df_silver.select("TailNum").distinct().withColumnRenamed("TailNum", "tail_num")
 
-# ==========================================
-# 5️⃣ INSERTAR DIMENSIONES
-# ==========================================
-dim_tiempo.write.jdbc(url=jdbc_url, table="dim_tiempo", mode="append", properties=properties)
-dim_geografia.write.jdbc(url=jdbc_url, table="dim_geografia", mode="append", properties=properties)
-dim_servicio_n1.write.jdbc(url=jdbc_url, table="dim_servicio_n1", mode="append", properties=properties)
+# 4. Truncar tablas en PostgreSQL antes de la carga
+tables_to_truncate = ["fact_flight_delays", "dim_date", "dim_airline", "dim_airport", "dim_aircraft"]
+with psycopg2.connect(f"host={pg_host} dbname={db_name} user={pg_user} password={pg_pass} sslmode=require") as conn:
+    with conn.cursor() as cur:
+        for table in tables_to_truncate:
+            print(f"Truncando tabla {table}...")
+            cur.execute(f"TRUNCATE TABLE {table} RESTART IDENTITY CASCADE;")
+        conn.commit()
 
-# ==========================================
-# 6️⃣ LEER DIMENSIONES INSERTADAS
-# ==========================================
-dim_tiempo_psql = spark.read.jdbc(url=jdbc_url, table="dim_tiempo", properties=properties)
-dim_geografia_psql = spark.read.jdbc(url=jdbc_url, table="dim_geografia", properties=properties)
-dim_servicio_n1_psql = spark.read.jdbc(url=jdbc_url, table="dim_servicio_n1", properties=properties)
+# 5. Cargar Dimensiones a PostgreSQL
+dim_date.write.jdbc(url=jdbc_url, table="dim_date", mode="append", properties=properties)
+dim_airline.write.jdbc(url=jdbc_url, table="dim_airline", mode="append", properties=properties)
+dim_airport.write.jdbc(url=jdbc_url, table="dim_airport", mode="append", properties=properties)
+dim_aircraft.write.jdbc(url=jdbc_url, table="dim_aircraft", mode="append", properties=properties)
+print("Dimensiones cargadas exitosamente.")
 
-# ==========================================
-# 7️⃣ BUILDEAR FACT CI
-# ==========================================
-df_norm = df.withColumn("geografia_norm", F.upper(F.trim(F.col("geografia"))))
-dim_g_alias = dim_geografia_psql.withColumn("geografia_norm", F.upper(F.trim(F.col("nombre_geografia"))))
+# 6. Leer dimensiones desde PostgreSQL para obtener los IDs generados
+dim_date_pg = spark.read.jdbc(url=jdbc_url, table="dim_date", properties=properties)
+dim_airline_pg = spark.read.jdbc(url=jdbc_url, table="dim_airline", properties=properties)
+dim_airport_pg = spark.read.jdbc(url=jdbc_url, table="dim_airport", properties=properties)
+dim_aircraft_pg = spark.read.jdbc(url=jdbc_url, table="dim_aircraft", properties=properties)
 
-fact = (
-    df_norm
-    .join(dim_tiempo_psql, df_norm["fecha"] == dim_tiempo_psql["fecha"], "inner")
-    .join(dim_g_alias, df_norm["geografia_norm"] == dim_g_alias["geografia_norm"], "inner")
-    .join(dim_servicio_n1_psql, df_norm["service1_id"].cast("int") == dim_servicio_n1_psql["servicio_n1_id"], "inner")
+# 7. Construir la Tabla de Hechos
+fact_flight_delays = (
+    df_silver
+    .join(dim_date_pg, "flight_date")
+    .join(dim_airline_pg, df_silver["UniqueCarrier"] == dim_airline_pg["carrier_code"])
+    .join(dim_airport_pg.alias("origin"), df_silver["Origin"] == F.col("origin.airport_code"))
+    .join(dim_airport_pg.alias("dest"), df_silver["Dest"] == F.col("dest.airport_code"))
+    .join(dim_aircraft_pg, df_silver["TailNum"] == dim_aircraft_pg["tail_num"])
     .select(
-        dim_tiempo_psql["tiempo_id"],
-        dim_g_alias["geografia_id"],
-        dim_servicio_n1_psql["servicio_n1_id"],
-        df_norm["issues_analysis_in_review_menor_7_dias"].cast("int"),
-        df_norm["issues_analysis_in_review"].cast("int"),
-        df_norm["historias_deployed_fix_version"].cast("int"),
-        df_norm["nro_historias_deployed"].cast("int"),
-        df_norm["repositorios_activos_nomenclatura_estandar"].cast("int"),
-        df_norm["total_repositorios_activos"].cast("int"),
-        df_norm["tiempo_medio_aprobacion_pr"].cast("float"),
-        df_norm["tamano_medio_pr"].cast("float"),
-        df_norm["repositorios_activos_gobernados_chimera"].cast("int"),
-        df_norm["tiempo_medio_integracion"].cast("float"),
-        df_norm["tiempo_medio_construcciones"].cast("float"),
-        df_norm["ejecuciones_exitosas_pipelines"].cast("int"),
-        df_norm["ejecuciones_totales_pipelines"].cast("int"),
-        df_norm["tiempo_medio_reparacion_builds"].cast("float"),
-        df_norm["repositorios_activos_sonarqube_ok"].cast("int"),
-        df_norm["repositorios_conectados_sonarqube"].cast("int"),
-        df_norm["items_pruebas_desplegados_xray"].cast("int"),
-        df_norm["items_desplegados_totales"].cast("int")
+        F.col("date_id"),
+        F.col("airline_id"),
+        F.col("origin.airport_id").alias("origin_airport_id"),
+        F.col("dest.airport_id").alias("dest_airport_id"),
+        F.col("aircraft_id"),
+        "FlightNum", "DepTime", "ArrTime", "CRSArrTime", "ActualElapsedTime", "CRSElapsedTime",
+        "AirTime", "ArrDelay", "DepDelay", "Distance", "TaxiIn", "TaxiOut", "Cancelled",
+        "Diverted", "CancellationCode", "CarrierDelay", "WeatherDelay", "NASDelay",
+        "SecurityDelay", "LateAircraftDelay"
     )
 )
 
-# ==========================================
-# 8️⃣ INSERTAR FACT CI
-# ==========================================
-fact.write.jdbc(
-    url=jdbc_url,
-    table="fact_mediciones_ci",
-    mode="append",
-    properties=properties
-)
+# 8. Cargar Tabla de Hechos a PostgreSQL
+fact_flight_delays.write.jdbc(url=jdbc_url, table="fact_flight_delays", mode="append", properties=properties)
+print("Tabla de hechos cargada exitosamente.")

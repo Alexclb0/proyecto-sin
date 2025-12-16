@@ -71,5 +71,5 @@ environment = "dev"
 databricks_cluster_name            = "cluster-demo-databricks"
 databricks_spark_version           = "15.4.x-scala2.12"
 databricks_node_type_id            = "Standard_DS3_v2"
-databricks_num_workers             = 0
+databricks_num_workers             = 1
 databricks_autotermination_minutes = 20

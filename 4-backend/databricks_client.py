@@ -29,6 +29,8 @@ HEADERS = {
 
 # Extraer el endpoint del storage account de la connection string
 def get_adls_endpoint_from_conn_str(conn_str):
+    if not conn_str:
+        return None
     parts = {p.split('=', 1)[0].lower(): p.split('=', 1)[1] for p in conn_str.split(';') if '=' in p}
     account_name = parts.get('accountname')
     return f"{account_name}.dfs.core.windows.net"

@@ -10,7 +10,6 @@ locals {
     DATABRICKS_TOKEN                = module.databricks_config.token
     FLASK_ENV                       = "production"
     AZURE_STORAGE_CONNECTION_STRING = module.storage.connection_string
-    DATABRICKS_CLUSTER_ID           = module.databricks_config.cluster_id
     KEY_VAULT_NAME                  = var.key_vault_name
   }
 

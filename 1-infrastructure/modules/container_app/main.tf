@@ -44,6 +44,11 @@ resource "azurerm_container_app" "main" {
       percentage      = 100
       latest_revision = true
     }
+    cors {
+    allowed_origins = [var.allowed_cors_origin]
+    allowed_methods = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+    allowed_headers = ["*"]
+    }
   }
   
 }

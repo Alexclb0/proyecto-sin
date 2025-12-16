@@ -71,14 +71,8 @@ resource "azurerm_key_vault_secret" "db_password" {
   key_vault_id = var.key_vault_id
 }
 
-resource "azurerm_key_vault_secret" "db_name_practitioner" {
-  name         = "db-name-practitioner"
+resource "azurerm_key_vault_secret" "db_name" {
+  name         = "db-name"
   value        = var.databases[0]
-  key_vault_id = var.key_vault_id
-}
-
-resource "azurerm_key_vault_secret" "db_name_ci" {
-  name         = "db-name-ci"
-  value        = var.databases[1]
   key_vault_id = var.key_vault_id
 }

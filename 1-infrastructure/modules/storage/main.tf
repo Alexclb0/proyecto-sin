@@ -26,13 +26,13 @@ resource "azurerm_role_assignment" "storage_data_contributor" {
 
 resource "azurerm_storage_container" "bronze" {
   name                  = "bronze"
-  storage_account_name  = azurerm_storage_account.main.name
+  storage_account_id    = azurerm_storage_account.main.id
   container_access_type = "private"
 }
 
 resource "azurerm_storage_container" "silver" {
   name                  = "silver"
-  storage_account_name  = azurerm_storage_account.main.name
+  storage_account_id    = azurerm_storage_account.main.id
   container_access_type = "private"
 }
 

@@ -154,19 +154,6 @@ module "static_web_app" {
   app_name            = var.static_web_app_name
 }
 
-module "firewall" {
-  source = "./modules/firewall"
-
-  resource_group_name      = module.rg_network.name
-  location                 = var.location
-  firewall_name            = var.firewall_name
-  firewall_policy_name     = var.firewall_policy_name
-  public_ip_name           = var.firewall_public_ip_name
-  vnet_name                = module.network.vnet_name
-  firewall_subnet_id       = module.network.firewall_subnet_id
-  log_analytics_workspace_id = module.log_analytics.workspace_id
-  source_address_range     = var.vnet_address_space[0]
-}
 
 module "route_table" {
   source = "./modules/route_table"

@@ -1,5 +1,6 @@
 # Wait for workspace to be fully provisioned before configuring it
 resource "time_sleep" "wait_for_workspace" {
+  depends_on = [var.workspace_url] # Depende de que la URL del workspace esté disponible
   create_duration = "60s"
 }
 
